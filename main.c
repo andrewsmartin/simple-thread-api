@@ -1,39 +1,33 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "queue.h"
 #include "thread.h"
 
-void random_sleep();
+static void busy_loop();
 
 int main(int argc, char *argv[])
 {
-    srand(time(NULL));
     thread_init();
-    
-    /* Spawn a few threads to sleep for a random time interval. */
+
     int i;
     for (i = 0; i < 10; i++)
     {
         char buffer[20];
         sprintf(buffer, "Thread %d", i);
-        thread_create(buffer, &random_sleep, SIGSTKSZ);
+        thread_create(buffer, &busy_loop, SIGSTKSZ);
     }
-    
-    run_threads();
-    while (1)
-    {
-        //thread_state();
-        sleep(5);
-    }
+
+    runthreads();
+
 	return 0;
 }
 
-void random_sleep()
+static void busy_loop()
 {
-    sleep(rand() % 5);
-    //printf("Finished.\n");
+    int i = 0;
+    while (i < 1000000) i++;
     thread_exit();
 }

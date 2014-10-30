@@ -1,14 +1,13 @@
+#include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <signal.h>
 #include <sys/time.h>
 #include <ucontext.h>
 
 #include "thread.h"
 #include "queue.h"
 
-#define MAIN_TID -1
 #define MAX_SEMAPHORES 100
 
 static int current_tid; /* Current thread id used by thread scheduler. */
@@ -24,12 +23,13 @@ static Queue *run_queue;
 static struct itimerval tval;
 
 /* Utility function prototypes. */
-void switch_thread();
-void context_swap(ucontext_t *active, ucontext_t *other);
+static void switch_thread();
+static void context_swap(ucontext_t *active, ucontext_t *other);
 
 int thread_init()
 {
     run_queue = queue_create();
+    return 0;
 }
 
 int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
@@ -65,42 +65,36 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
     cb->context.uc_stack.ss_size = stacksize;
     cb->context.uc_link = &main_context;
     cb->func = threadfunc;
-    makecontext(&cb->context, cb->func, 0);
-    
     cb->state = RUNNABLE;
+    makecontext(&cb->context, cb->func, 0);
     cb_table[tid_count] = cb;
+    
     enqueue(run_queue, tid_count);
     
-    tid_count++;
+    return tid_count++;
 }
 
 void thread_exit()
 { 
-    /* If the thread is running then it shouldn't be in the run queue...by they way I've set it up. 
-       No need to pop. Also, don't remove from the table. This needs to be executed without interrupt though. */
-    
+    /* If the thread is running then it shouldn't be in the ready queue...just by they way I've set it up. */
     /* Set the state to EXIT. */
     thread_control_block *cb = cb_table[current_tid];
-    /*sigaddset(cb->sset, SIGALRM);
-    sigprocmask(SIG_BLOCK, cb->sset, cb->oldset);*/
-    printf("[%d] Exiting.\n", current_tid);
+    printf("[Thread %d] exiting.\n", current_tid);
     cb->state = EXIT;
-    //sigprocmask(SIG_SETMASK, cb->oldset, NULL);
-    
-    /* Return control to the scheduler (unnecessary I believe). */
-    //context_swap(&cb->context, &main_context);
 }
 
-void run_threads()
+void runthreads()
 {
-    /* For now I'm setting this up so that no context switch is performed here...seems 
-       difficult to manage timing issues. I don't like that every thread switch will
-       have to have this check but it works for now. */
-    current_tid = MAIN_TID;
-    
+    current_tid = queue_front(run_queue);
+    getcontext(&main_context);
+    main_context.uc_link = NULL;
+    main_context.uc_stack.ss_sp = malloc(SIGSTKSZ);
+    main_context.uc_stack.ss_size = SIGSTKSZ;
+    makecontext(&main_context, &switch_thread, 0);
     /* Configure and start the thread scheduler. */
     sigset(SIGALRM, &switch_thread);
-    set_quantum_size(100);
+    set_quantum_size(100000);
+    setitimer(ITIMER_REAL, &tval, 0);
 }
 
 /* TODO: the assignment instructions say that n should be
@@ -115,8 +109,6 @@ void set_quantum_size(int n)
     tval.it_interval.tv_usec = n;
     tval.it_value.tv_sec = 0;
     tval.it_value.tv_usec = n;
-    
-    setitimer(ITIMER_REAL, &tval, NULL);
 }
 
 int create_semaphore(int value)
@@ -263,22 +255,16 @@ void switch_thread()
 {
     printf("[%d] Interrupted...\n", current_tid);
     /* Pop thread from the run queue and insert current thread into back of queue. */
-    if (queue_size(run_queue) <= 0) return; /* No threads left in run queue. */
     int tid = dequeue(run_queue);
     
-    if (current_tid != MAIN_TID)
-    {
-        thread_control_block *cb_curr = cb_table[current_tid];
-        /* Add time delta onto elapsed time of previous thread (should be a close approx? TODO find out. */
-        cb_curr->elapsed_us += tval.it_interval.tv_usec;
-        if (cb_curr->state == RUNNING) {
-            cb_curr->state = RUNNABLE;
-            enqueue(run_queue, current_tid);
-            printf("[%d] Added to run queue.\n", current_tid);
-        }
-        else {
-            printf("[%d] EXIT or BLOCKED. Not adding to run queue.\n", current_tid);
-        }
+    thread_control_block *cb_curr = cb_table[current_tid];
+    /* Add time delta onto elapsed time of previous thread (should be a close approx? TODO find out. */
+    cb_curr->elapsed_us += tval.it_interval.tv_usec;
+    
+    if (cb_curr->state == RUNNING) {
+        cb_curr->state = RUNNABLE;
+        enqueue(run_queue, current_tid);
+        printf("[%d] Added to run queue.\n", current_tid);
     }
     
     /* Change next thread's state to RUNNING. */

@@ -27,3 +27,18 @@ int queue_size(Queue *q)
 {
     return list_length(q);
 }
+
+int queue_front(Queue *q)
+{
+    return list_item_int(q, 0);
+}
+
+int queue_back(Queue *q)
+{
+    return list_item_int(q, list_length(q) - 1);
+}
+
+int queue_empty(Queue *q)
+{
+    return list_empty(q);
+}

@@ -11,5 +11,8 @@ void enqueue(Queue*, int);
 int dequeue(Queue*);
 void queue_release(Queue*);
 int queue_size(Queue*);
+int queue_front(Queue*);
+int queue_back(Queue*);
+int queue_empty(Queue*);
 
 #endif
