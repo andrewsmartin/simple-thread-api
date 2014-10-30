@@ -8,6 +8,9 @@
 #include "thread.h"
 #include "queue.h"
 
+#define MAIN_TID -1
+
+static int current_tid; /* Current thread id used by thread scheduler. */
 static int tid_count = 0;
 static int quantum_ns = 1000; /* Is this a good initial value? I dunno */
 
@@ -50,8 +53,8 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
     cb->func = threadfunc;
     makecontext(&cb->context, cb->func, 0);
     
-    /* Set the state of the thread to RUNNING. */
-    cb->state = RUNNING;
+    /* Set the state of the thread to RUNNABLE. */
+    cb->state = RUNNABLE;
     
     /* Add this control block to the table. */
     cb_table[tid_count] = cb;
@@ -97,31 +100,30 @@ void thread_state()
 
 void thread_exit()
 {
-	/* Remove the thread from the run queue. 
-	   How the fuck do I get the thread id? I can get the current context...but
-       that has no info regarding thread id. 
+    /* Remove the thread from the run queue. 
+	   How the fuck do I get the thread id? OH SHIT IT'S STORED BY THE SCHEDULER!! */
        
-       I need to somehow get the control block because I need to change the state
-       inside the control block. Maybe I could do something incredibly hacky by
-       calling thread_create with the same name to get the id. */
-       
-       /* Perform a context swap back to the successor context. */
-        ucontext_t *uctx;
-        if (getcontext(uctx) == -1)
-            printf("Error getting context...what the hell do i do now?\n");
-        if (swapcontext(uctx, uctx->uc_link) == -1)
-            printf("Couldn't swap context, the fuck??\n");
+    /* If the thread is running then it shouldn't be in the run queue...by they way I've set it up. 
+       No need to pop. Also, don't remove from the table. */
+    
+    /* Set the state to EXIT. */
+    thread_control_block *cb = cb_table[current_tid];
+    cb->state = EXIT;
+    
+    /* Perform a context swap back to the scheduler. */
+    context_swap();
 }
 
 void run_threads()
 {
-    /* Activate the thread switcher. */
+    /* For now I'm setting this up so that no context switch is performed here...seems 
+       difficult to manage timing issues. I don't like that every thread switch will
+       have to have this check but it works for now. */
+    current_tid = MAIN;
+    
+    /* Configure and start the thread scheduler. */
     sigset(SIGALRM, switch_thread);
-    tval.it_interval.tv_sec = 0;
-    tval.it_interval.tv_usec = 100;
-    tval.it_value.tv_sec = 0;
-    tval.it_value.tv_usec = 100;
-    setitimer(ITIMER_REAL, &tval, 0);
+    set_quantum(100);
 }
 
 /* TODO: the assignment instructions say that n should be
@@ -131,24 +133,44 @@ void run_threads()
    http://www.sde.cs.titech.ac.jp/~gondow/dwarf2-xml/HTML-rxref/app/gcc-3.3.2/lib/gcc-lib/sparc-sun-solaris2.8/3.3.2/include/sys/types.h.html */
 void set_quantum(int n)
 {
+    /* Set the timer value. */
+    tval.it_interval.tv_sec = 0;
     tval.it_interval.tv_usec = n;
+    tval.it_value.tv_sec = 0;
+    tval.it_value.tv_usec = n;
+    
+    setitimer(ITIMER_REAL, &tval, NULL);
 }
 
 /*********************/
 /* UTILITY FUNCTIONS */
 /*********************/
 
+/* A round-robin thread scheduler. */
 void switch_thread()
 {
-    /* Pop a value from the run queue */
+    /* Pop thread from the run queue and insert current thread into back of queue. */
     if (queue_size(run_queue) <= 0) return; /* No threads left in run queue. */
     int tid = dequeue(run_queue);
     
+    if (current_tid != MAIN)
+    {
+        /* Change current thread's state to RUNNABLE. */   
+        thread_control_block *cb_curr = cb_table[current_tid];
+        cb_curr->state = RUNNABLE;
+        enqueue(run_queue, current_tid);
+    }
+    
+    /* Change next thread's state to RUNNING. */
     thread_control_block *cb = cb_table[tid];
-    /* Perform a context switch. */
+    cb->state = RUNNING;
+    current_tid = tid;
+    
+    /* We are ready to perform a context switch. */
     context_swap();
 }
 
+/* Wrapper function to perform a context switch and handle any errors. */
 void context_swap()
 {
     ucontext_t *uctx;
