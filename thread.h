@@ -1,6 +1,7 @@
 #ifndef __THREAD_H
 #define __THREAD_H
 
+#include <signal.h>
 #include <ucontext.h>
 
 #include "queue.h"
@@ -19,6 +20,8 @@ typedef struct _thread_control_block
     int thread_id;
     t_state state;
     void (*func)();
+    struct itimerval tval;
+    sigset_t *sset, *oldset;
 } thread_control_block;
 
 typedef struct sem
