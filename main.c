@@ -21,13 +21,17 @@ int main(int argc, char *argv[])
     }
 
     runthreads();
-
+    while (1) {
+        int i = 0;
+        while (i < 100000000) i++;
+        thread_state();
+    }
 	return 0;
 }
 
 static void busy_loop()
 {
     int i = 0;
-    while (i < 1000000) i++;
+    while (i < 10000000) i++;
     thread_exit();
 }

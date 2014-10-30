@@ -219,12 +219,12 @@ void thread_state()
 {   
     printf("Thread Name\tState\t\tElapsed Time (ms)\n");
     int i;
-    for (i = 0; i < 100; i++)
+    for (i = 0; i < tid_count; i++)
     {
         char state[20];
-        thread_control_block cb = *cb_table[i];
+        thread_control_block *cb = cb_table[i];
         
-        switch (cb.state)
+        switch (cb->state)
         {
             case RUNNABLE:
                 strcpy(state, "RUNNABLE");
@@ -236,21 +236,22 @@ void thread_state()
                 strcpy(state, "BLOCKED");
                 break;
             case EXIT:
-                strcpy(state, "EXIT");
+                strcpy(state, "EXIT\t");
                 break;
             default:
                 strcpy(state, "ERROR-UNKNOWN");
         }
         
-        printf("%s\t%s\t%.3f\n", cb.thread_name, state, cb.elapsed_us / 1000.0);
+        printf("%s\t%s\t%.3f\n", cb->thread_name, state, cb->elapsed_us / 1000.0);
     }
+    printf("\n");
 }
 
 /*********************/
 /* UTILITY FUNCTIONS */
 /*********************/
 
-/* A round-robin thread scheduler. */
+/* A simple thread scheduler. */
 void switch_thread()
 {
     printf("[%d] Interrupted...\n", current_tid);
