@@ -2,6 +2,7 @@
 #define __THREAD_H
 
 #include <signal.h>
+#include <sys/time.h>
 #include <ucontext.h>
 
 #include "queue.h"
@@ -20,7 +21,7 @@ typedef struct _thread_control_block
     int thread_id;
     t_state state;
     void (*func)();
-    struct itimerval tval;
+    suseconds_t elapsed_us;
     sigset_t *sset, *oldset;
 } thread_control_block;
 

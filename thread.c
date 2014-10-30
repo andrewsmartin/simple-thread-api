@@ -55,6 +55,7 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
     cb->sset = malloc(sizeof(sigset_t));
     sigemptyset(cb->sset);
     cb->oldset = malloc(sizeof(sigset_t));
+    cb->elapsed_us = 0;
     
     /* Allocate some stack space. */
     /* TODO: Here I should make sure stacksize is within a good range. */
@@ -74,19 +75,20 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
 }
 
 void thread_exit()
-{
-    /* I *think* that current_tid is safe to use. Never runs at same time
-       as main context, which is the only thing that modifies the value. */
-       
+{ 
     /* If the thread is running then it shouldn't be in the run queue...by they way I've set it up. 
-       No need to pop. Also, don't remove from the table. */
+       No need to pop. Also, don't remove from the table. This needs to be executed without interrupt though. */
     
     /* Set the state to EXIT. */
     thread_control_block *cb = cb_table[current_tid];
+    /*sigaddset(cb->sset, SIGALRM);
+    sigprocmask(SIG_BLOCK, cb->sset, cb->oldset);*/
+    printf("[%d] Exiting.\n", current_tid);
     cb->state = EXIT;
+    //sigprocmask(SIG_SETMASK, cb->oldset, NULL);
     
-    /* Return control to the scheduler. */
-    context_swap(&cb->context, &main_context);
+    /* Return control to the scheduler (unnecessary I believe). */
+    //context_swap(&cb->context, &main_context);
 }
 
 void run_threads()
@@ -223,8 +225,7 @@ void destroy_semaphore(int semaphore)
 
 void thread_state()
 {   
-    printf("Thread Name\tState\tRunning Time\n");
-    
+    printf("Thread Name\tState\t\tElapsed Time (ms)\n");
     int i;
     for (i = 0; i < 100; i++)
     {
@@ -249,7 +250,7 @@ void thread_state()
                 strcpy(state, "ERROR-UNKNOWN");
         }
         
-        printf("%s\t%s\t%.2f\n", cb.thread_name, state, 4.2); /* TODO: timing */
+        printf("%s\t%s\t%.3f\n", cb.thread_name, state, cb.elapsed_us / 1000.0);
     }
 }
 
@@ -260,23 +261,31 @@ void thread_state()
 /* A round-robin thread scheduler. */
 void switch_thread()
 {
+    printf("[%d] Interrupted...\n", current_tid);
     /* Pop thread from the run queue and insert current thread into back of queue. */
     if (queue_size(run_queue) <= 0) return; /* No threads left in run queue. */
     int tid = dequeue(run_queue);
     
     if (current_tid != MAIN_TID)
     {
-        /* Change current thread's state to RUNNABLE. */   
         thread_control_block *cb_curr = cb_table[current_tid];
-        cb_curr->state = RUNNABLE;
-        enqueue(run_queue, current_tid);
+        /* Add time delta onto elapsed time of previous thread (should be a close approx? TODO find out. */
+        cb_curr->elapsed_us += tval.it_interval.tv_usec;
+        if (cb_curr->state == RUNNING) {
+            cb_curr->state = RUNNABLE;
+            enqueue(run_queue, current_tid);
+            printf("[%d] Added to run queue.\n", current_tid);
+        }
+        else {
+            printf("[%d] EXIT or BLOCKED. Not adding to run queue.\n", current_tid);
+        }
     }
     
     /* Change next thread's state to RUNNING. */
     thread_control_block *cb = cb_table[tid];
     cb->state = RUNNING;
     current_tid = tid;
-    
+    printf("[%d] Resuming...\n", current_tid);
     /* We are ready to perform a context switch. */
     context_swap(&main_context, &cb->context);
 }
