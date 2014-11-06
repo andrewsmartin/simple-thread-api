@@ -8,7 +8,6 @@
 #include "queue.h"
 
 #define THREAD_NAME_LEN 128
-#define MAX_THREADS 1000
 
 typedef unsigned int uint;
 
@@ -18,11 +17,8 @@ typedef struct _thread_control_block
 {
     ucontext_t context;
     char thread_name[THREAD_NAME_LEN];
-    int thread_id;
     t_state state;
-    void (*func)();
     suseconds_t elapsed_us;
-    sigset_t *sset, *oldset;
 } thread_control_block;
 
 typedef struct sem
