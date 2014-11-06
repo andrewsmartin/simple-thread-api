@@ -18,7 +18,7 @@ typedef struct _thread_control_block
     ucontext_t context;
     char thread_name[THREAD_NAME_LEN];
     t_state state;
-    suseconds_t elapsed_us;
+    double elapsed_ms;
 } thread_control_block;
 
 typedef struct sem

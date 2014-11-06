@@ -22,7 +22,7 @@ static thread_control_block **cb_table;
 static sem_t **sem_table;
 static ucontext_t main_context, scheduler_context;
 static Queue *run_queue;
-static struct itimerval tval;
+static struct itimerval tval, const_timer, prof_timer;
 
 /* Utility function prototypes. */
 static void schedule_threads();
@@ -39,6 +39,10 @@ int thread_init()
     sem_table = calloc(SEM_TABLE_SIZE_INC, sizeof(sem_t*));
     sem_table_size = 10;
     run_queue = queue_create();
+    const_timer.it_value.tv_sec = 200;
+    const_timer.it_value.tv_usec = 200;
+    const_timer.it_interval.tv_sec = 0;
+    const_timer.it_interval.tv_usec = 0;
     return 0;
 }
 
@@ -56,7 +60,7 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
     
     strncpy(cb->thread_name, threadname, THREAD_NAME_LEN);
     cb->thread_name[THREAD_NAME_LEN - 1] = '\0';
-    cb->elapsed_us = 0;
+    cb->elapsed_ms = 0;
     
     /* Allocate some stack space. */
     /* TODO: Here I should make sure stacksize is within a good range. */
@@ -105,6 +109,7 @@ void runthreads()
     scheduler_context.uc_stack.ss_size = SIGSTKSZ;
     scheduler_context.uc_link = &main_context;
     sigaddset(&scheduler_context.uc_sigmask, SIGALRM);
+    sigprocmask(SIG_BLOCK, &scheduler_context.uc_sigmask, NULL);
     makecontext(&scheduler_context, &schedule_threads, 0); 
     
     /* Switch control to the thread scheduler. */
@@ -119,10 +124,12 @@ void runthreads()
 void set_quantum_size(int n)
 {
     /* Set the timer value. */
-    tval.it_interval.tv_sec = 0;
-    tval.it_interval.tv_usec = n;
-    tval.it_value.tv_sec = 0;
-    tval.it_value.tv_usec = n;
+    int sec = n / 1000000;
+    int usec = n % 1000000;
+    tval.it_interval.tv_sec = sec;
+    tval.it_interval.tv_usec = usec;
+    tval.it_value.tv_sec = sec;
+    tval.it_value.tv_usec = usec;
 }
 
 int create_semaphore(int value)
@@ -247,7 +254,7 @@ void thread_state()
                 strcpy(state, "ERROR-UNKNOWN");
         }
         
-        printf("%s\t%s\t%.3f\n", cb->thread_name, state, cb->elapsed_us / 1000.0);
+        printf("%s\t%s\t%.3f\n", cb->thread_name, state, cb->elapsed_ms);
     }
     printf("\n");
 }
@@ -258,9 +265,9 @@ void thread_state()
 
 /* Simple FCFS thread scheduler. */
 void schedule_threads()
-{
+{   
     sigset(SIGALRM, &switch_thread);
-    set_quantum_size(100000);
+    set_quantum_size(10000);
     setitimer(ITIMER_REAL, &tval, 0);
     
     /* While there are still threads in the run queue... */
@@ -270,6 +277,7 @@ void schedule_threads()
         current_tid = dequeue(run_queue);
         thread_control_block *cb = cb_table[current_tid];
         cb->state = RUNNING;
+        setitimer(ITIMER_PROF, &const_timer, NULL);
         context_swap(&scheduler_context, &cb->context);
     }
 }
@@ -277,19 +285,19 @@ void schedule_threads()
 /* A handler to SIGALRM that moves the current thread to the back of the run queue. */
 static void switch_thread()
 {   
-    /* Insert interrupted thread to back of run queue. */
-    printf("[%d] Interrupted...\n", current_tid);
-    
+    //printf("Switching threads...\n");
     thread_control_block *cb_curr = cb_table[current_tid];
-    
-    /* Add time delta onto elapsed time of previous thread (should be a close approx? TODO find out. */
-    cb_curr->elapsed_us += tval.it_interval.tv_usec;
     
     if (cb_curr->state == RUNNING) {
         cb_curr->state = RUNNABLE;
         enqueue(run_queue, current_tid);
     }
     
+    getitimer(ITIMER_PROF, &prof_timer);
+    //printf("%d, %d, %d, %d\n", const_timer.it_value.tv_sec, const_timer.it_value.tv_usec, prof_timer.it_value.tv_sec, prof_timer.it_value.tv_usec);
+    double start = const_timer.it_value.tv_sec * 1000.0 + const_timer.it_value.tv_usec / 1000.0;
+    double end = prof_timer.it_value.tv_sec * 1000.0 - prof_timer.it_value.tv_usec / 1000.0;
+    cb_curr->elapsed_ms += start - end;    
     context_swap(&cb_curr->context, &scheduler_context);
 }
 

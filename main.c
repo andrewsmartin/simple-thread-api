@@ -19,17 +19,15 @@ int main(int argc, char *argv[])
         sprintf(buffer, "Thread %d", i);
         thread_create(buffer, &busy_loop, SIGSTKSZ);
     }
-    puts("Running threads.");
     runthreads();
+    printf("Threads exited; printing state.\n");
     thread_state();
-    printf("All threads finished.\n");
     
 	return 0;
 }
 
 void busy_loop()
 {
-    puts("Starting job");
     int i = 0;
     while (i < 400000000) {
         //if (1 % 1 == 0) printf("%d\n", i);
