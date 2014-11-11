@@ -2,7 +2,7 @@ CFLAGS = -DHAVE_PTHREAD_RWLOCK=1 -Wall
 OBJS = main.o thread.o queue.o
 
 thread: ${OBJS}
-	gcc ${OBJS} -o thread -lslack 
+	gcc ${OBJS} -o thread -lslack -lrt
 	
 main.o: thread.h main.c
 	gcc -c main.c ${CFLAGS}

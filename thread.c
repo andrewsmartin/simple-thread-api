@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
 #include <ucontext.h>
 
 #include "thread.h"
@@ -22,7 +23,9 @@ static thread_control_block **cb_table;
 static sem_t **sem_table;
 static ucontext_t main_context, scheduler_context;
 static Queue *run_queue;
-static struct itimerval tval, const_timer, prof_timer;
+static struct itimerval tval;
+static struct timespec prev;
+struct timespec proc_clock;
 
 /* Utility function prototypes. */
 static void schedule_threads();
@@ -39,10 +42,6 @@ int thread_init()
     sem_table = calloc(SEM_TABLE_SIZE_INC, sizeof(sem_t*));
     sem_table_size = 10;
     run_queue = queue_create();
-    const_timer.it_value.tv_sec = 200;
-    const_timer.it_value.tv_usec = 200;
-    const_timer.it_interval.tv_sec = 0;
-    const_timer.it_interval.tv_usec = 0;
     return 0;
 }
 
@@ -84,7 +83,6 @@ void thread_exit()
 { 
     /* Set the state to EXIT. */
     thread_control_block *cb = cb_table[current_tid];
-    //printf("[Thread %d] exiting.\n", current_tid);
     cb->state = EXIT;
     /* Do not free the control block yet...wait for join. */
 }
@@ -242,10 +240,10 @@ void thread_state()
                 strcpy(state, "RUNNABLE");
                 break;
             case RUNNING:
-                strcpy(state, "RUNNING");
+                strcpy(state, "RUNNING\t");
                 break;
             case BLOCKED:
-                strcpy(state, "BLOCKED");
+                strcpy(state, "BLOCKED\t");
                 break;
             case EXIT:
                 strcpy(state, "EXIT\t");
@@ -267,25 +265,32 @@ void thread_state()
 void schedule_threads()
 {   
     sigset(SIGALRM, &switch_thread);
-    set_quantum_size(10000);
-    setitimer(ITIMER_REAL, &tval, 0);
+    set_quantum_size(1000);
+    setitimer(ITIMER_REAL, &tval, NULL);
     
     /* While there are still threads in the run queue... */
     while (queue_size(run_queue) > 0)
     {
         /* Get ready to switch context to next thread in queue. */
         current_tid = dequeue(run_queue);
+        //printf("Current tid: %d\n", current_tid);
         thread_control_block *cb = cb_table[current_tid];
         cb->state = RUNNING;
-        setitimer(ITIMER_PROF, &const_timer, NULL);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &prev);
         context_swap(&scheduler_context, &cb->context);
     }
+    /* Turn off the timer before giving control back to main. */
+    tval.it_interval.tv_sec = 0;
+    tval.it_interval.tv_usec = 0;
+    tval.it_value.tv_sec = 0;
+    tval.it_value.tv_usec = 0;
+    setitimer(ITIMER_REAL, &tval, 0);
+    puts("Thread scheduler exiting");
 }
 
 /* A handler to SIGALRM that moves the current thread to the back of the run queue. */
 static void switch_thread()
 {   
-    //printf("Switching threads...\n");
     thread_control_block *cb_curr = cb_table[current_tid];
     
     if (cb_curr->state == RUNNING) {
@@ -293,11 +298,9 @@ static void switch_thread()
         enqueue(run_queue, current_tid);
     }
     
-    getitimer(ITIMER_PROF, &prof_timer);
-    //printf("%d, %d, %d, %d\n", const_timer.it_value.tv_sec, const_timer.it_value.tv_usec, prof_timer.it_value.tv_sec, prof_timer.it_value.tv_usec);
-    double start = const_timer.it_value.tv_sec * 1000.0 + const_timer.it_value.tv_usec / 1000.0;
-    double end = prof_timer.it_value.tv_sec * 1000.0 - prof_timer.it_value.tv_usec / 1000.0;
-    cb_curr->elapsed_ms += start - end;    
+    struct timespec tp;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tp);
+    cb_curr->elapsed_ms += tp.tv_sec * 1000.0 + tp.tv_nsec / 1000000.0 - (prev.tv_sec * 1000.0 + prev.tv_nsec / 1000000.0);
     context_swap(&cb_curr->context, &scheduler_context);
 }
 
