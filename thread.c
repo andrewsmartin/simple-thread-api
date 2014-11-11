@@ -11,13 +11,11 @@
 #include "thread.h"
 #include "queue.h"
 
-#define THREAD_TABLE_SIZE_INC 10
-#define SEM_TABLE_SIZE_INC 10
+#define MAX_THREADS 1000
+#define MAX_SEM 100
 
 static int current_tid; /* Current thread id used by thread scheduler. */
-static int thread_table_size = 0;
-static int num_threads = 0;
-static int sem_table_size = 0;
+static int num_threads = 0; /* Number of created threads */
 static int num_sem = 0;   /* The number of active semaphores. */
 static thread_control_block **cb_table;
 static sem_t **sem_table;
@@ -31,22 +29,25 @@ struct timespec proc_clock;
 static void schedule_threads();
 static void switch_thread();
 static void context_swap(ucontext_t *active, ucontext_t *other);
-static int get_available_thread_slot();
 static int get_available_semaphore_slot();
 
 int thread_init()
 {
-    /* Allocate space initially for 10 threads. Will be resized if more space needed. */
-    cb_table = calloc(THREAD_TABLE_SIZE_INC, sizeof(thread_control_block*));
-    thread_table_size = 10;
-    sem_table = calloc(SEM_TABLE_SIZE_INC, sizeof(sem_t*));
-    sem_table_size = 10;
+    /* Allocate space MAX_THREADS threads. */
+    cb_table = calloc(MAX_THREADS, sizeof(thread_control_block*));
+    sem_table = calloc(MAX_SEM, sizeof(sem_t*));
     run_queue = queue_create();
+    set_quantum_size(10000);
     return 0;
 }
 
 int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
 {
+    if (num_threads >= MAX_THREADS) {
+        printf("Error: Maximum number of threads in use; not creating new thread.\n");
+        return -1;
+    }
+
     thread_control_block *cb = malloc(sizeof(thread_control_block));
     
     /* Initialize ucontext_t */
@@ -54,15 +55,13 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
     {
         printf("CRITICAL: Could not get active context. Aborting thread_create().\n");
         free(cb);
-        return -1;
+        return -2;
     }
     
     strncpy(cb->thread_name, threadname, THREAD_NAME_LEN);
     cb->thread_name[THREAD_NAME_LEN - 1] = '\0';
     cb->elapsed_ms = 0;
     
-    /* Allocate some stack space. */
-    /* TODO: Here I should make sure stacksize is within a good range. */
     /* Create the thread context. */
     cb->context.uc_stack.ss_sp = malloc(stacksize);
     cb->context.uc_stack.ss_size = stacksize;
@@ -70,7 +69,7 @@ int thread_create(char *threadname, void (*threadfunc)(), int stacksize)
     cb->state = RUNNABLE;
     makecontext(&cb->context, threadfunc, 0);
     
-    int tid_index = get_available_thread_slot();
+    int tid_index = num_threads;
     cb_table[tid_index] = cb;
     
     enqueue(run_queue, tid_index);
@@ -84,43 +83,29 @@ void thread_exit()
     /* Set the state to EXIT. */
     thread_control_block *cb = cb_table[current_tid];
     cb->state = EXIT;
-    /* Do not free the control block yet...wait for join. */
+    /* Do not free the control block yet. */
 }
 
 void runthreads()
 {   
-    /* We create a special thread for the caller. Note we don't want to use create_thread because
-       a call to makecontext() is not necessary. */
-    /*thread_control_block *cb = malloc(sizeof(thread_control_block));
-    strncpy(cb->thread_name, "MAIN", THREAD_NAME_LEN);
-    cb->thread_name[THREAD_NAME_LEN - 1] = '\0';
-    cb->elapsed_us = 0;
-    cb->state = RUNNABLE;
-    int tid_index = get_available_thread_slot();
-    cb_table[tid_index] = cb;
-    enqueue(run_queue, tid_index);
-    num_threads++;*/
-    
-     /* Configure and start the thread scheduler. */
+    /* Configure and start the thread scheduler. */
     getcontext(&scheduler_context);
     scheduler_context.uc_stack.ss_sp = malloc(SIGSTKSZ);
     scheduler_context.uc_stack.ss_size = SIGSTKSZ;
     scheduler_context.uc_link = &main_context;
     sigaddset(&scheduler_context.uc_sigmask, SIGALRM);
-    sigprocmask(SIG_BLOCK, &scheduler_context.uc_sigmask, NULL);
     makecontext(&scheduler_context, &schedule_threads, 0); 
-    
+    sigset(SIGALRM, &switch_thread);
     /* Switch control to the thread scheduler. */
     context_swap(&main_context, &scheduler_context);
 }
 
-/* TODO: the assignment instructions say that n should be
-   in nanoseconds...I should follow up by asking prof. I found
-   the header code and suseconds_t (the type of tv_usec) appears 
-   to just be an alias for an unsigned long. See
-   http://www.sde.cs.titech.ac.jp/~gondow/dwarf2-xml/HTML-rxref/app/gcc-3.3.2/lib/gcc-lib/sparc-sun-solaris2.8/3.3.2/include/sys/types.h.html */
 void set_quantum_size(int n)
 {
+    if (n < 500) {
+        printf("Error: Value smaller than minimum quantum size (500). Ignoring.\n");
+        return;
+    }
     /* Set the timer value. */
     int sec = n / 1000000;
     int usec = n % 1000000;
@@ -132,6 +117,11 @@ void set_quantum_size(int n)
 
 int create_semaphore(int value)
 {
+    int sem_index = get_available_semaphore_slot();
+    if (sem_index == -1) {
+        printf("Error: maximum number of semaphores already in use.\n");
+        return -1;
+    }
     /* Create a new semaphore. */
     num_sem++;
     sem_t *sem = malloc(sizeof(sem_t));
@@ -139,7 +129,6 @@ int create_semaphore(int value)
     sem->count = value;
     sem->wait_queue = queue_create();
     /* Insert the semaphore in the first empty slot in the table. */
-    int sem_index = get_available_semaphore_slot();
     sem_table[sem_index] = sem;
     return sem_index;
 }
@@ -158,11 +147,16 @@ void semaphore_wait(int semaphore)
     
     if (sem->count < 0)
     {
+        printf("Thread %d waiting for semaphore...\n", current_tid);
         /* The calling thread needs to be put in a waiting queue. */
         cb->state = BLOCKED;
         enqueue(sem->wait_queue, current_tid);
         /* Return control to the scheduler. */
         context_swap(&cb->context, &scheduler_context);
+    }
+    else {
+        printf("Thread %d acquired semaphore [count=%d].\n", current_tid, sem->count);
+        sigprocmask(SIG_UNBLOCK, &cb->context.uc_sigmask, NULL);
     }
 }
 
@@ -177,7 +171,7 @@ void semaphore_signal(int semaphore)
     
     sem_t *sem = sem_table[semaphore];
     sem->count++;
-    
+    printf("Thread %d signalled semaphore [count=%d]\n", current_tid, sem->count);
     if (sem->count <= 0)    /* i.e. If there are threads waiting on this semaphore...*/
     {
         /* No threads are waiting on this semaphore; nothing to do. Should not happen in principle. */
@@ -185,17 +179,19 @@ void semaphore_signal(int semaphore)
         
         /* Pop a blocked thread from the wait queue of this semaphore. Re-enable signaling asap. */
         int tid = dequeue(sem->wait_queue);
-        
+        printf("Thread %d woken up.\n", tid);
         /* The signalling thread is now finished operating on semaphore internals. Can unblock SIGALRM. */
         sigprocmask(SIG_UNBLOCK, &cb->context.uc_sigmask, NULL);
         
         thread_control_block *cb_w = cb_table[tid];
         cb_w->state = RUNNABLE;
+        sigprocmask(SIG_UNBLOCK, &cb_w->context.uc_sigmask, NULL);
         /* We must make sure that the waiting thread is put back onto the run queue before
            unblocking the signal, or else this thread will never be re-scheduled! */
         enqueue(run_queue, tid);
-        
-        sigprocmask(SIG_UNBLOCK, &cb_w->context.uc_sigmask, NULL);
+    }
+    else {
+        sigprocmask(SIG_UNBLOCK, &cb->context.uc_sigmask, NULL);
     }
 }
 
@@ -226,9 +222,9 @@ void destroy_semaphore(int semaphore)
 
 void thread_state()
 {   
-    printf("Thread Name\tState\t\tElapsed Time (ms)\n");
+    printf("\nThread Name\tState\t\tElapsed Time (ms)\n");
     int i;
-    for (i = 0; i < thread_table_size; i++)
+    for (i = 0; i < num_threads; i++)
     {
         char state[20];
         thread_control_block *cb = cb_table[i];
@@ -264,16 +260,14 @@ void thread_state()
 /* Simple FCFS thread scheduler. */
 void schedule_threads()
 {   
-    sigset(SIGALRM, &switch_thread);
-    set_quantum_size(1000);
+    sigprocmask(SIG_BLOCK, &scheduler_context.uc_sigmask, NULL);
     setitimer(ITIMER_REAL, &tval, NULL);
-    
     /* While there are still threads in the run queue... */
     while (queue_size(run_queue) > 0)
     {
         /* Get ready to switch context to next thread in queue. */
         current_tid = dequeue(run_queue);
-        //printf("Current tid: %d\n", current_tid);
+        printf("Current tid: %d\n", current_tid);
         thread_control_block *cb = cb_table[current_tid];
         cb->state = RUNNING;
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &prev);
@@ -285,7 +279,7 @@ void schedule_threads()
     tval.it_value.tv_sec = 0;
     tval.it_value.tv_usec = 0;
     setitimer(ITIMER_REAL, &tval, 0);
-    puts("Thread scheduler exiting");
+    printf("All threads finished.\n");
 }
 
 /* A handler to SIGALRM that moves the current thread to the back of the run queue. */
@@ -311,28 +305,13 @@ void context_swap(ucontext_t *active, ucontext_t *other)
         printf("ERROR: Error switching context.\n");
 }
 
-static int get_available_thread_slot()
-{
-    int i;
-    for (i = 0; i < thread_table_size; i++)
-    {
-        if (cb_table[i] == NULL) return i;
-    }
-    
-    /* Resize the table */
-    cb_table = realloc(cb_table, thread_table_size + THREAD_TABLE_SIZE_INC);
-    return i;
-}
-
 static int get_available_semaphore_slot()
 {
     int i;
-    for (i = 0; i < sem_table_size; i++)
+    for (i = 0; i < MAX_SEM; i++)
     {
         if (sem_table[i] == NULL) return i;
     }
-    
-    /* Resize the table */
-    sem_table = realloc(sem_table, sem_table_size + SEM_TABLE_SIZE_INC);
-    return i;
+    /* No more space left... */
+    return -1;
 }

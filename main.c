@@ -15,15 +15,17 @@ int main(int argc, char *argv[])
     thread_init();
 
     int i;
-    for (i = 0; i < 10; i++)
+    for (i = 0; i < 11; i++)
     {
         char buffer[20];
         sprintf(buffer, "Thread %d", i);
         thread_create(buffer, &busy_loop, SIGSTKSZ);
     }
-    sem = create_semaphore(9); 
+    sem = create_semaphore(3);
+    destroy_semaphore(sem);
+    sem = create_semaphore(4);
+    set_quantum_size(10000);
     runthreads();
-    printf("Threads exited; printing state.\n");
     thread_state();
     
 	return 0;
@@ -32,10 +34,10 @@ int main(int argc, char *argv[])
 void busy_loop()
 {
     int i = 0;
-    while (i < 100000000) {
-        semaphore_wait(sem);
+    semaphore_wait(sem);
+    while (i < 400000000) {
         i++;
-        semaphore_signal(sem);
     }
+    semaphore_signal(sem);
     thread_exit();
 }
